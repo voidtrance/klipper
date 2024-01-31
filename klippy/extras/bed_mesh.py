@@ -234,7 +234,11 @@ class BedMesh:
             "mesh_max": (0., 0.),
             "probed_matrix": [[]],
             "mesh_matrix": [[]],
-            "profiles": self.pmgr.get_profiles()
+            "profiles": self.pmgr.get_profiles(),
+            ### DEBUG ###
+            "orig_points": self.bmc.orig_points,
+            "points": self.bmc.points
+            ### DEBUG END ###
         }
         if self.z_mesh is not None:
             params = self.z_mesh.get_mesh_params()
@@ -330,6 +334,9 @@ class BedMeshCalibrate:
         self.adaptive_margin = config.getfloat('adaptive_margin', 0.0)
         self.bedmesh = bedmesh
         self.mesh_config = collections.OrderedDict()
+        ### DEBUG ###
+        self.orig_points = []
+        ### DEBUG END ###
         self._init_mesh_config(config)
         self.probe_mgr = ProbeManager(
             config, self.orig_config, self.probe_finalize
@@ -611,7 +618,7 @@ class BedMeshCalibrate:
             self._verify_algorithm(gcmd.error)
             self.probe_mgr.generate_points(
                 self.mesh_config, self.mesh_min, self.mesh_max,
-                self.radius, self.origin, probe_method
+                self.radius, self.origin, probe_method, True
             )
             gcmd.respond_info("Generating new points...")
             self.print_generated_points(gcmd.respond_info)
@@ -621,7 +628,7 @@ class BedMeshCalibrate:
         else:
             self.probe_mgr.generate_points(
                 self.mesh_config, self.mesh_min, self.mesh_max,
-                self.radius, self.origin, probe_method
+                self.radius, self.origin, probe_method, True
             )
     def dump_calibration(self, gcmd=None):
         if gcmd is not None and gcmd.get_command_parameters():
@@ -818,6 +825,8 @@ class ProbeManager:
         self.substitutes = collections.OrderedDict()
         self.is_round = orig_config["radius"] is not None
         self.probe_helper = probe.ProbePointsHelper(config, finalize_cb, [])
+        # Bed mesh points cannot be individually fuzzed.
+        self.probe_helper.use_fuzzing(False)
         self.probe_helper.use_xy_offsets(True)
         self.rapid_scan_helper = RapidScanHelper(config, self, finalize_cb)
         self._init_faulty_regions(config)
@@ -883,7 +892,7 @@ class ProbeManager:
 
     def generate_points(
         self, mesh_config, mesh_min, mesh_max, radius, origin,
-        probe_method="automatic"
+        probe_method="automatic", fuzz=False
     ):
         x_cnt = mesh_config['x_count']
         y_cnt = mesh_config['y_count']
@@ -906,7 +915,17 @@ class ProbeManager:
         else:
             # rectangular bed, only re-calc max_x
             max_x = min_x + x_dist * (x_cnt - 1)
-        pos_y = min_y
+        if fuzz:
+            probe = self.printer.lookup_object('probe')
+            probe_session = probe.get_session()
+            y_fuzz = probe_session.position_fuzzer([0, 0, 0])[0]
+        else:
+            y_fuzz = 0
+        ### DEBUG ###
+        self.orig_points = []
+        orig_y = min_y
+        ### DEBUG END ###
+        pos_y = min_y + y_fuzz
         points = []
         for i in range(y_cnt):
             for j in range(x_cnt):
@@ -916,6 +935,11 @@ class ProbeManager:
                 else:
                     # move in negative direction
                     pos_x = max_x - j * x_dist
+                ### DEBUG ###
+                self.orig_points.append((pos_x, orig_y))
+                ### DEBUG END ###
+                if fuzz:
+                    pos_x = probe_session.position_fuzzer([pos_x, 0, 0])[0]
                 if radius is None:
                     # rectangular bed, append
                     points.append((pos_x, pos_y))
@@ -926,6 +950,9 @@ class ProbeManager:
                         points.append(
                             (origin[0] + pos_x, origin[1] + pos_y))
             pos_y += y_dist
+            ### DEBUG ###
+            orig_y += y_dist
+            ### DEBUG END ###
         if self.zero_ref_pos is None or probe_method == "manual":
             # Zero Reference Disabled
             self.zref_mode = ZrefMode.DISABLED
