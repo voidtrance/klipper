@@ -4,8 +4,10 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
+import random
 import pins
 from . import manual_probe
+from math import floor
 
 HINT_TIMEOUT = """
 If the probe did not move far enough to trigger, then
@@ -65,7 +67,12 @@ class ProbeCommandHelper:
     def get_status(self, eventtime):
         return {'name': self.name,
                 'last_query': self.last_state,
-                'last_z_result': self.last_z_result}
+                'last_z_result': self.last_z_result,
+                ### DEBUG ###
+                'max_fuzz': self.probe.probe_session.max_fuzz,
+                'fuzz_data': self.probe.probe_session.fuzz_point_data
+                ### DEBUG END ###
+                }
     cmd_QUERY_PROBE_help = "Return the status of the z-probe"
     def cmd_QUERY_PROBE(self, gcmd):
         if self.query_endstop is None:
@@ -129,7 +136,10 @@ class ProbeCommandHelper:
         # Probe bed sample_count times
         probe_session = self.probe.start_probe_session(fo_gcmd)
         positions = []
+        orig_pos = pos[:]
         while len(positions) < sample_count:
+            # Fuzz probing position
+            self._move(orig_pos, params['lift_speed'])
             # Probe position
             pos = probe_session.run_probe(fo_gcmd)
             positions.append(pos)
@@ -257,11 +267,31 @@ class ProbeSessionHelper:
                                                  minval=0.)
         self.samples_retries = config.getint('samples_tolerance_retries', 0,
                                              minval=0)
+        self.max_fuzz = config.getfloat('max_fuzz_distance', 0., 0.)
+        self.printer.register_event_handler('klippy:mcu_identify',
+                                            self._handle_mcu_identify)
+        self.use_fuzzing = bool(self.max_fuzz)
+        self.fuzz_this_session = self.use_fuzzing
+        ### DEBUG ###
+        self.fuzz_point_data = []
+        ### DEBUG END ###
         # Session state
         self.multi_probe_pending = False
         # Register event handlers
         self.printer.register_event_handler("gcode:command_error",
                                             self._handle_command_error)
+    def _handle_mcu_identify(self):
+        # The maximum fuzzing distance from the original probe point
+        # coordinates is set to be 3 times the nozzle tip diameter.
+        # The nozzle tip diameter is computed based on the information
+        # provided in the following E3D nozzle drawings:
+        #
+        # https://wiki.e3d-online.com/images/3/3a/V6-NOZZLE-ALL.pdf
+        configfile = self.printer.lookup_object('configfile')
+        settings = configfile.get_status(0)
+        nozzle_diameter = float(settings["config"]["extruder"]["nozzle_diameter"])
+        upper_fuzz_limit = nozzle_diameter * 2.5 * 3
+        self.max_fuzz = min(self.max_fuzz, upper_fuzz_limit)
     def _handle_command_error(self):
         if self.multi_probe_pending:
             try:
@@ -271,17 +301,45 @@ class ProbeSessionHelper:
     def _probe_state_error(self):
         raise self.printer.command_error(
             "Internal probe error - start/end probe session mismatch")
-    def start_probe_session(self, gcmd):
+    def position_fuzzer(self, coord, min_val=None, max_val=None):
+        ### DEBUG ###
+        orig_coord = coord[:]
+        ### DEBUG END ###
+        fuzzed_coord = coord[:]
+        if self.max_fuzz and coord[0] is not None and coord[1] is not None:
+            if min_val is None:
+                min_val = -self.max_fuzz
+            if max_val is None:
+                max_val = self.max_fuzz
+            logging.info("min: %s, max: %s" % (min_val, max_val))
+            logging.info("coord: %s" % coord)
+            fuzzed_coord[0] += floor(random.uniform(min_val, max_val) * 100) / 100
+            fuzzed_coord[1] += floor(random.uniform(min_val, max_val) * 100) / 100
+        ### DEBUG ###
+        if orig_coord[0] is not None and orig_coord is not None:
+            logging.info("Fuzzing: %s -> %s" % (orig_coord, fuzzed_coord))
+            self.fuzz_point_data.append((orig_coord, fuzzed_coord))
+        ### DEBUG END ###
+        return fuzzed_coord
+    def start_probe_session(self, gcmd, use_fuzzing=None):
         if self.multi_probe_pending:
             self._probe_state_error()
         self.mcu_probe.multi_probe_begin()
         self.multi_probe_pending = True
+        if use_fuzzing is None:
+            self.fuzz_this_session = self.use_fuzzing
+        else:
+            self.fuzz_this_session = use_fuzzing
+        ### DEBUG ###
+        self.fuzz_point_data = []
+        ### DEBUG END ###
         return self
     def end_probe_session(self):
         if not self.multi_probe_pending:
             self._probe_state_error()
         self.multi_probe_pending = False
         self.mcu_probe.multi_probe_end()
+        self.fuzz_this_session = self.use_fuzzing
     def get_probe_params(self, gcmd=None):
         if gcmd is None:
             gcmd = self.dummy_gcode_cmd
@@ -334,6 +392,9 @@ class ProbeSessionHelper:
         sample_count = params['samples']
         while len(positions) < sample_count:
             # Probe position
+            if self.fuzz_this_session:
+                coord = self.position_fuzzer(probexy)
+                toolhead.manual_move(coord, params['lift_speed'])
             pos = self._probe(params['probe_speed'])
             positions.append(pos)
             # Check samples tolerance
@@ -347,7 +408,7 @@ class ProbeSessionHelper:
             # Retract
             if len(positions) < sample_count:
                 toolhead.manual_move(
-                    probexy + [pos[2] + params['sample_retract_dist']],
+                    [None, None] + [pos[2] + params['sample_retract_dist']],
                     params['lift_speed'])
         # Calculate and return result
         return calc_probe_z_average(positions, params['samples_result'])
@@ -387,6 +448,7 @@ class ProbePointsHelper:
         self.lift_speed = self.speed
         self.probe_offsets = (0., 0., 0.)
         self.results = []
+        self.fuzzing = True
     def minimum_points(self,n):
         if len(self.probe_points) < n:
             raise self.printer.config_error(
@@ -398,6 +460,8 @@ class ProbePointsHelper:
         self.use_offsets = use_offsets
     def get_lift_speed(self):
         return self.lift_speed
+    def use_fuzzing(self, fuzzing):
+        self.fuzzing = fuzzing
     def _move_next(self):
         toolhead = self.printer.lookup_object('toolhead')
         # Lift toolhead
@@ -441,7 +505,7 @@ class ProbePointsHelper:
         if self.horizontal_move_z < self.probe_offsets[2]:
             raise gcmd.error("horizontal_move_z can't be less than"
                              " probe's z_offset")
-        probe_session = probe.start_probe_session(gcmd)
+        probe_session = probe.start_probe_session(gcmd, self.fuzzing)
         while 1:
             done = self._move_next()
             if done:
@@ -547,10 +611,12 @@ class PrinterProbe:
         return self.probe_session.get_probe_params(gcmd)
     def get_offsets(self):
         return self.probe_offsets.get_offsets()
+    def get_session(self):
+        return self.probe_session
     def get_status(self, eventtime):
         return self.cmd_helper.get_status(eventtime)
-    def start_probe_session(self, gcmd):
-        return self.probe_session.start_probe_session(gcmd)
+    def start_probe_session(self, gcmd, fuzzing=None):
+        return self.probe_session.start_probe_session(gcmd, fuzzing)
 
 def load_config(config):
     return PrinterProbe(config)

@@ -334,6 +334,11 @@ radius:
 #horizontal_move_z: 5
 #   The height (in mm) that the head should be commanded to move to
 #   just prior to starting a probe operation. The default is 5.
+#max_fuzz:
+#   Optional maximum fuzzing distance. When set, the probe points will
+#   be offset by a random amount between [-max_fuzz, max_fuzz] in both
+#   X and Y. Fuzzing should be used on printers that use the nozzle
+#   when probing in order to avoid repeatedly touching the same spot.
 ```
 
 ### Deltesian Kinematics
@@ -998,6 +1003,11 @@ Visual Examples:
 #adaptive_margin:
 #   An optional margin (in mm) to be added around the bed area used by
 #   the defined print objects when generating an adaptive mesh.
+#max_fuzz:
+#   Optional maximum fuzzing distance. When set, the bed mesh probe
+#   points will be offset by a random amount between [-max_fuzz, max_fuzz]
+#   in both X and Y. Fuzzing should be used on printers that use the nozzle
+#   when probing in order to avoid repeatedly touching the same spot.
 ```
 
 ### [bed_tilt]
@@ -1035,6 +1045,11 @@ information.
 #horizontal_move_z: 5
 #   The height (in mm) that the head should be commanded to move to
 #   just prior to starting a probe operation. The default is 5.
+#max_fuzz:
+#   Optional maximum fuzzing distance. When set, the probe points will
+#   be offset by a random amount between [-max_fuzz, max_fuzz] in both
+#   X and Y. Fuzzing should be used on printers that use the nozzle
+#   when probing in order to avoid repeatedly touching the same spot.
 ```
 
 ### [bed_screws]
@@ -1122,6 +1137,12 @@ information.
 #   Default value is CW-M3 which most printers use. A clockwise
 #   rotation of the knob decreases the gap between the nozzle and the
 #   bed. Conversely, a counter-clockwise rotation increases the gap.
+#max_fuzz:
+#   Optional maximum fuzzing distance. When set, the screw probe
+#   points will be offset by a random amount between [-max_fuzz,
+#   max_fuzz] in both X and Y. Fuzzing should be used on printers
+#   that use the nozzle when probing in order to avoid repeatedly
+#   touching the same spot.
 ```
 
 ### [z_tilt]
@@ -1163,6 +1184,11 @@ extended [G-Code command](G-Codes.md#z_tilt) becomes available.
 #   more points than steppers then you will likely have a fixed
 #   minimum value for the range of probed points which you can learn
 #   by observing command output.
+#max_fuzz:
+#   Optional maximum fuzzing distance. When set, the probe points will
+#   be offset by a random amount between [-max_fuzz, max_fuzz] in both
+#   X and Y. Fuzzing should be used on printers that use the nozzle
+#   when probing in order to avoid repeatedly touching the same spot.
 ```
 
 ### [quad_gantry_level]
@@ -1213,6 +1239,12 @@ Where x is the 0, 0 point on the bed
 #retry_tolerance: 0
 #   If retries are enabled then retry if largest and smallest probed
 #   points differ more than retry_tolerance.
+#max_fuzz:
+#   Optional maximum fuzzing distance. When set, the gantry probe
+#   points will be offset by a random amount between [-max_fuzz,
+#   max_fuzz] in both X and Y. Fuzzing should be used on printers that
+#   use the nozzle when probing in order to avoid repeatedly touching
+#   the same spot.
 ```
 
 ### [skew_correction]

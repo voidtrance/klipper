@@ -229,7 +229,11 @@ class BedMesh:
             "mesh_max": (0., 0.),
             "probed_matrix": [[]],
             "mesh_matrix": [[]],
-            "profiles": self.pmgr.get_profiles()
+            "profiles": self.pmgr.get_profiles(),
+            ### DEBUG ###
+            "orig_points": self.bmc.orig_points,
+            "points": self.bmc.points
+            ### DEBUG END ###
         }
         if self.z_mesh is not None:
             params = self.z_mesh.get_mesh_params()
@@ -306,6 +310,9 @@ class BedMeshCalibrate:
         self.substituted_indices = collections.OrderedDict()
         self.bedmesh = bedmesh
         self.mesh_config = collections.OrderedDict()
+        ### DEBUG ###
+        self.orig_points = []
+        ### DEBUG END ###
         self._init_mesh_config(config)
         self._generate_points(config.error)
         self._profile_name = "default"
@@ -313,11 +320,13 @@ class BedMeshCalibrate:
             config, self.probe_finalize, self._get_adjusted_points())
         self.probe_helper.minimum_points(3)
         self.probe_helper.use_xy_offsets(True)
+        # Bed mesh points cannot be individually fuzzed.
+        self.probe_helper.use_fuzzing(False)
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_command(
             'BED_MESH_CALIBRATE', self.cmd_BED_MESH_CALIBRATE,
             desc=self.cmd_BED_MESH_CALIBRATE_help)
-    def _generate_points(self, error, probe_method="automatic"):
+    def _generate_points(self, error, probe_method="automatic", fuzz=False):
         x_cnt = self.mesh_config['x_count']
         y_cnt = self.mesh_config['y_count']
         min_x, min_y = self.mesh_min
@@ -339,7 +348,17 @@ class BedMeshCalibrate:
         else:
             # rectangular bed, only re-calc max_x
             max_x = min_x + x_dist * (x_cnt - 1)
-        pos_y = min_y
+        if fuzz:
+            probe = self.printer.lookup_object('probe')
+            probe_session = probe.get_session()
+            y_fuzz = probe_session.position_fuzzer([0, 0, 0])[0]
+        else:
+            y_fuzz = 0
+        ### DEBUG ###
+        self.orig_points = []
+        orig_y = min_y
+        ### DEBUG END ###
+        pos_y = min_y + y_fuzz
         points = []
         for i in range(y_cnt):
             for j in range(x_cnt):
@@ -349,6 +368,11 @@ class BedMeshCalibrate:
                 else:
                     # move in negative direction
                     pos_x = max_x - j * x_dist
+                ### DEBUG ###
+                self.orig_points.append((pos_x, orig_y))
+                ### DEBUG END ###
+                if fuzz:
+                    pos_x = probe_session.position_fuzzer([pos_x, 0, 0])[0]
                 if self.radius is None:
                     # rectangular bed, append
                     points.append((pos_x, pos_y))
@@ -359,6 +383,9 @@ class BedMeshCalibrate:
                         points.append(
                             (self.origin[0] + pos_x, self.origin[1] + pos_y))
             pos_y += y_dist
+            ### DEBUG ###
+            orig_y += y_dist
+            ### DEBUG END ###
         self.points = points
         if self.zero_ref_pos is None or probe_method == "manual":
             # Zero Reference Disabled
@@ -712,7 +739,7 @@ class BedMeshCalibrate:
 
         if need_cfg_update:
             self._verify_algorithm(gcmd.error)
-            self._generate_points(gcmd.error, probe_method)
+            self._generate_points(gcmd.error, probe_method, True)
             gcmd.respond_info("Generating new points...")
             self.print_generated_points(gcmd.respond_info)
             pts = self._get_adjusted_points()
@@ -721,7 +748,7 @@ class BedMeshCalibrate:
                              for k, v in self.mesh_config.items()])
             logging.info("Updated Mesh Configuration:\n" + msg)
         else:
-            self._generate_points(gcmd.error, probe_method)
+            self._generate_points(gcmd.error, probe_method, True)
             pts = self._get_adjusted_points()
             self.probe_helper.update_probe_points(pts, 3)
     def _get_adjusted_points(self):
