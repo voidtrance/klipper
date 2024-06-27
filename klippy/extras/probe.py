@@ -4,10 +4,10 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
-import random
 import pins
 from . import manual_probe
 from math import floor
+from random import uniform
 
 HINT_TIMEOUT = """
 If the probe did not move far enough to trigger, then
@@ -289,7 +289,7 @@ class ProbeSessionHelper:
         # The nozzle tip diameter is computed based on the information
         # provided in the following E3D nozzle drawings:
         #
-        # https://wiki.e3d-online.com/images/3/3a/V6-NOZZLE-ALL.pdf
+        # https://e3d-online.zendesk.com/hc/en-us/article_attachments/360016241858
         configfile = self.printer.lookup_object('configfile')
         settings = configfile.get_status(0)
         nozzle_diameter = float(settings["config"]["extruder"]["nozzle_diameter"])
@@ -304,22 +304,31 @@ class ProbeSessionHelper:
     def _probe_state_error(self):
         raise self.printer.command_error(
             "Internal probe error - start/end probe session mismatch")
-    def position_fuzzer(self, coord, min_val=None, max_val=None):
+    def position_fuzzer(self, coord):
         ### DEBUG ###
         orig_coord = coord[:]
         ### DEBUG END ###
         fuzzed_coord = coord[:]
         if self.max_fuzz and coord[0] is not None and coord[1] is not None:
-            if min_val is None:
-                min_val = -self.max_fuzz
-            if max_val is None:
-                max_val = self.max_fuzz
-            logging.info("min: %s, max: %s" % (min_val, max_val))
+            toolhead = self.printer.lookup_object('toolhead')
+            kin_status = toolhead.get_kinematics().get_status()
+            axis_min = kin_status.get('axis_minimum')
+            axis_max = kin_status.get('axis_maximum')
+            fuzz_min = [-self.max_fuzz] * len(axis_min)
+            fuzz_max = [self.max_fuzz] * len(axis_max)
+            # Make sure we don't probe outside the bed.
+            for i, axis in enumerate(axis_min):
+                fuzz_min[i] = -((axis + self.max_fuzz) - coord[i])
+            for i, axis in enumerate(axis_max):
+                fuzz_max[i] = (axis - self.max_fuzz) - coord[i]
+            ### DEBUG ###
+            logging.info("min: %s, max: %s" % (fuzz_min, fuzz_max))
             logging.info("coord: %s" % coord)
-            fuzzed_coord[0] += floor(random.uniform(min_val, max_val) * 100) / 100
-            fuzzed_coord[1] += floor(random.uniform(min_val, max_val) * 100) / 100
+            ### END DEBUG ###
+            fuzzed_coord[0] += floor(uniform(fuzz_min[0], fuzz_max[0]) * 100) / 100
+            fuzzed_coord[1] += floor(uniform(fuzz_max[1], fuzz_max[1]) * 100) / 100
         ### DEBUG ###
-        if orig_coord[0] is not None and orig_coord is not None:
+        if orig_coord[0] is not None and orig_coord[1] is not None:
             logging.info("Fuzzing: %s -> %s" % (orig_coord, fuzzed_coord))
             self.fuzz_point_data.append((orig_coord, fuzzed_coord))
         ### DEBUG END ###
@@ -396,8 +405,10 @@ class ProbeSessionHelper:
         positions = []
         sample_count = params['samples']
         while len(positions) < sample_count:
-            # Probe position
-            if self.fuzz_this_session:
+            # Fuzz the probe point but only fuzz the first sample
+            # because fuzzing each sample will cause tolerance
+            # issues.
+            if self.fuzz_this_session and len(positions) == 1:
                 coord = self.position_fuzzer(probexy)
                 toolhead.manual_move(coord, params['lift_speed'])
             pos = self._probe(params['probe_speed'])
